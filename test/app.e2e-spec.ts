@@ -1,25 +1,156 @@
-import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication } from '@nestjs/common';
-import * as request from 'supertest';
-import { App } from 'supertest/types';
-import { AppModule } from './../src/app.module';
+import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
+import { AppModule } from 'src/app.module';
+import * as pactum from 'pactum';
+import { PrismaService } from 'src/prisma/prisma.service';
+import { SigninDto, SignupDto } from 'src/auth/dto';
+import { EditUserDto } from 'src/user/dto';
 
-describe('AppController (e2e)', () => {
-  let app: INestApplication<App>;
-
-  beforeEach(async () => {
-    const moduleFixture: TestingModule = await Test.createTestingModule({
+describe('App e2e', () => {
+  let app: INestApplication;
+  let prisma: PrismaService;
+  beforeAll(async () => {
+    // for end-to-end testing, we will use app module
+    const moduleRef = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();
 
-    app = moduleFixture.createNestApplication();
+    app = moduleRef.createNestApplication();
+    app.useGlobalPipes(
+      new ValidationPipe({
+        whitelist: true,
+      }),
+    );
     await app.init();
+    await app.listen(4444);
+
+    prisma = app.get(PrismaService);
+    await prisma.cleanDb();
+    pactum.request.setBaseUrl('http://localhost:4444');
   });
 
-  it('/ (GET)', () => {
-    return request(app.getHttpServer())
-      .get('/')
-      .expect(200)
-      .expect('Hello World!');
+  afterAll(async () => {
+    await app.close();
+  });
+
+  describe('Auth', () => {
+    describe('Signup', () => {
+      const dto: SignupDto = {
+        email: 'noman.test@test.com',
+        password: '123456',
+        firstName: 'Noman Test',
+      };
+      it('should throw if email empty', () => {
+        return pactum
+          .spec()
+          .post('/auth/signup')
+          .withBody({ password: '123456' })
+          .expectStatus(400);
+      });
+      it('should throw if password empty', () => {
+        return pactum
+          .spec()
+          .post('/auth/signup')
+          .withBody({ email: 'noman.test@test.com' })
+          .expectStatus(400);
+      });
+      it('should throw if no body provided', () => {
+        return pactum.spec().post('/auth/signup').expectStatus(400);
+      });
+      it('should signup', () => {
+        return pactum
+          .spec()
+          .post('/auth/signup')
+          .withBody(dto)
+          .expectStatus(201);
+      });
+    });
+
+    describe('Signin', () => {
+      const dto: SigninDto = {
+        email: 'noman.test@test.com',
+        password: '123456',
+      };
+      it('should throw if email empty', () => {
+        return pactum
+          .spec()
+          .post('/auth/signin')
+          .withBody({ password: '123456' })
+          .expectStatus(400);
+      });
+      it('should throw if password empty', () => {
+        return pactum
+          .spec()
+          .post('/auth/signin')
+          .withBody({ email: 'noman.test@test.com' })
+          .expectStatus(400);
+      });
+      it('should throw if no body provided', () => {
+        return pactum.spec().post('/auth/signin').expectStatus(400);
+      });
+      // .stores() will save the access token so we can use it in user and bookmarks tests for auth
+      it('should signin', () => {
+        return pactum
+          .spec()
+          .post('/auth/signin')
+          .withBody(dto)
+          .expectStatus(200)
+          .stores('userAt', 'access_token');
+      });
+    });
+  });
+
+  describe('User', () => {
+    describe('Get me', () => {
+      // .inspect() is used to see the logs related to req/res
+      it('should get current user', () => {
+        return pactum
+          .spec()
+          .get('/users/me')
+          .withHeaders({
+            Authorization: 'Bearer $S{userAt}',
+          })
+          .expectStatus(200);
+      });
+    });
+    describe('Edit user', () => {
+      it('should edit user', () => {
+        const dto: EditUserDto = {
+          firstName: 'Noman Editor',
+          email: 'noman.test.edit@test.com',
+        };
+        return pactum
+          .spec()
+          .patch('/users')
+          .withHeaders({
+            Authorization: 'Bearer $S{userAt}',
+          })
+          .withBody(dto)
+          .expectStatus(200)
+          .expectBodyContains(dto.firstName)
+          .expectBodyContains(dto.email)
+          .inspect();
+      });
+    });
+  });
+
+  describe('Bookmarks', () => {
+    describe('Get empty bookmarks', () => {
+      it('should get bookmarks', () => {
+        return pactum
+          .spec()
+          .get('/bookmarks')
+          .withHeaders({
+            Authorization: 'Bearer $S{userAt}',
+          })
+          .expectStatus(200)
+          .expectBody([]);
+      });
+    });
+    describe('Create bookmark', () => {});
+    describe('Get bookmarks', () => {});
+    describe('Get bookmark by id', () => {});
+    describe('Edit bookmark by id', () => {});
+    describe('Delete bookmark by id', () => {});
   });
 });
